@@ -1,5 +1,10 @@
 extern crate sha2;
-
+use anyhow::Result;
+use plonky2::field::types::Field;
+use plonky2::iop::witness::{PartialWitness, WitnessWrite};
+use plonky2::plonk::circuit_builder::CircuitBuilder;
+use plonky2::plonk::circuit_data::CircuitConfig;
+use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use sha2::{Digest, Sha256};
 use std::cmp;
 
@@ -38,7 +43,42 @@ pub fn compute_shuffled_index(index: &mut u64, index_count: u64, seed: [u8; 32])
     *index
 }
 
-fn main() {}
+fn main() {
+    const D: usize = 2;
+    const N: usize = 32;
+    type C = PoseidonGoldilocksConfig;
+    type F = <C as GenericConfig<D>>::F;
+
+    let circuit_config: CircuitConfig = CircuitConfig::standard_recursion_config();
+    let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+
+    // The arithmetic circuit.
+    let index = builder.add_virtual_target();
+    let index_count = builder.add_virtual_target();
+    let seed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
+
+    let current_round = builder.add_virtual_target();
+    
+    for current_round in 0..SHUFFLE_ROUND_COUNT {
+        let current_round_target = builder.constant(F::from_canonical_u32(current_round as u32));
+        let mut to_be_hashed: [plonky2::iop::target::Target; N*2] = builder.add_virtual_target_arr();
+        to_be_hashed[0..N].copy_from_slice(&seed);
+        println!("to_be_hashed is {:x?}", to_be_hashed);
+    }
+
+    // Provide initial values.
+    let mut pw = PartialWitness::new();
+    pw.set_target(index, F::ONE);
+    pw.set_target(index_count, F::TWO);
+
+    let data = builder.build::<C>();
+    let proof = data.prove(pw);
+    println!(
+        "Proof"
+    );
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
