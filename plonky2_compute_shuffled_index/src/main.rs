@@ -1,5 +1,4 @@
 extern crate sha2;
-use anyhow::Result;
 use plonky2::field::types::Field;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
@@ -56,14 +55,16 @@ fn main() {
     let index = builder.add_virtual_target();
     let index_count = builder.add_virtual_target();
     let seed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
-
-    let current_round = builder.add_virtual_target();
     
     for current_round in 0..SHUFFLE_ROUND_COUNT {
         let current_round_target = builder.constant(F::from_canonical_u32(current_round as u32));
+        let mut current_round_to_be_hashed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
+        current_round_to_be_hashed[0] = current_round_target;
+
         let mut to_be_hashed: [plonky2::iop::target::Target; N*2] = builder.add_virtual_target_arr();
         to_be_hashed[0..N].copy_from_slice(&seed);
-        println!("to_be_hashed is {:x?}", to_be_hashed);
+        to_be_hashed[N..].copy_from_slice(&current_round_to_be_hashed);
+        // println!("to_be_hashed is {:x?}", to_be_hashed);
     }
 
     // Provide initial values.
