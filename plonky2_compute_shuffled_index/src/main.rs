@@ -42,7 +42,7 @@ pub fn compute_shuffled_index(index: &mut u64, index_count: u64, seed: [u8; 32])
     *index
 }
 
-fn main() {
+fn main() -> Result<(), anyhow::Error> {
     const D: usize = 2;
     const N: usize = 32;
     type C = PoseidonGoldilocksConfig;
@@ -124,9 +124,10 @@ fn main() {
     ]);
 
     let data = builder.build::<C>();
-    let proof = data.prove(pw);
+    let proof = data.prove(pw)?;
     println!("Proof: {:x?}", proof);
 
+    data.verify(proof)
 }
 
 #[cfg(test)]
