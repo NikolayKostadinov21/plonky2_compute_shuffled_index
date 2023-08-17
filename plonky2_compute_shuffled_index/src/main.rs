@@ -42,6 +42,40 @@ pub fn compute_shuffled_index(index: &mut u64, index_count: u64, seed: [u8; 32])
     *index
 }
 
+fn type_to_bits<T>(val: &T) -> bool {
+    let size = mem::size_of::<T>();
+
+    let byte_ptr = val as *const T as *const u8;
+
+    let mut bits = Vec::new();
+    for i in 0..size {
+        let byte = unsafe { *byte_ptr.add(i) };
+        bits.push(byte);
+    }
+
+    bits[size] == 1
+}
+
+pub fn max(index: Target, flip: Target) -> bool {
+    const D: usize = 2;
+    type C = PoseidonGoldilocksConfig;
+    type F = <C as GenericConfig<D>>::F;
+
+    let circuit_config: CircuitConfig = CircuitConfig::standard_recursion_config();
+    let mut builder = CircuitBuilder::<F, D>::new(circuit_config);
+
+    let mut index_vector: Vec<Target> = Vec::new();
+    let mut flip_vector: Vec<Target> = Vec::new();
+    index_vector.push(index);
+    flip_vector.push(flip);
+
+    let _offset = builder.constant(F::from_canonical_u64(1 << 63));
+    let index_with_offset = builder.add(index, _offset);
+    let diff_with_offset = builder.sub(index_with_offset, flip);
+
+    type_to_bits(&diff_with_offset)
+}
+
 fn main() -> Result<(), anyhow::Error> {
     const D: usize = 2;
     const N: usize = 32;
@@ -81,12 +115,17 @@ fn main() -> Result<(), anyhow::Error> {
         let quotient_times_divisor = builder.mul(index_count, pivot_quotient);
         let flip = builder.sub(sum_pivot_icounter_index, quotient_times_divisor);
 
-        // position = max(index, flip)
-        let position = 1;
+        let mut position;
+        let index_is_greater: bool = max(index, flip);
+        if index_is_greater {
+            position = index;
+        } else {
+            position = flip;
+        }
 
-        let position_target = builder.constant(F::from_canonical_u32((position as usize / 256) as u32));
+        let position_divided = builder.div(position, position_divider_256);
         let mut position_to_be_hashed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
-        position_to_be_hashed[0] = position_target;
+        position_to_be_hashed[0] = position_divided;
 
         let mut source_to_be_hashed: [plonky2::iop::target::Target; N*3] = builder.add_virtual_target_arr();
         source_to_be_hashed[..N].copy_from_slice(&seed);
@@ -97,6 +136,19 @@ fn main() -> Result<(), anyhow::Error> {
         let mut source_hasher = Sha256::new();
         source_hasher.update(_source_to_be_hashed);
         let source = &mut source_hasher.finalize();
+
+        let pos_div_256 = builder.div(position, position_divider_256);
+        let quot_mul_256 = builder.mul(position_divider_256, pos_div_256);
+        let pos_mod_256 = builder.sub(position, quot_mul_256);
+
+        let eight_const = builder.constant(F::from_canonical_u8(8));
+        let source_index = builder.div(pos_mod_256, eight_const);
+
+        // let _byte = source[source_index];
+
+        let pos_div_8 = builder.div(position, eight_const);
+        let quot_mul_8 = builder.mul(pos_div_8, eight_const);
+        let pos_mod_8 = builder.sub(position, quot_mul_8);
 
         let byte = (source[(position as usize % 256) / 8]) as u8;
         let bit = (byte >> (position as usize % 8)) % 2;

@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 sha2 = "*"
 plonky2 = "0.1.4"
+anyhow = "1.0.74"
