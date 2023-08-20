@@ -1,11 +1,13 @@
 extern crate sha2;
 use plonky2::field::types::Field;
+use plonky2::iop::target::Target;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::CircuitConfig;
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use sha2::{Digest, Sha256};
-use std::cmp;
+use plonky2_sha256::circuit::make_circuits;
+use std::{cmp, mem};
 
 const SHUFFLE_ROUND_COUNT: usize = 90;
 
@@ -88,26 +90,28 @@ fn main() -> Result<(), anyhow::Error> {
     // The arithmetic circuit.
     let mut index = builder.add_virtual_target();
     let index_count = builder.add_virtual_target();
-    let seed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
+    let seed: [Target; N] = builder.add_virtual_target_arr();
     
     for current_round in 0..SHUFFLE_ROUND_COUNT {
         let current_round_target = builder.constant(F::from_canonical_u8(current_round as u8));
-        let mut current_round_to_be_hashed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
+        let mut current_round_to_be_hashed: [Target; N] = builder.add_virtual_target_arr();
         current_round_to_be_hashed[0] = current_round_target;
 
-        let mut to_be_hashed_seed_round: [plonky2::iop::target::Target; N*2] = builder.add_virtual_target_arr();
+        let mut to_be_hashed_seed_round: [Target; N*2] = builder.add_virtual_target_arr();
         to_be_hashed_seed_round[..N].copy_from_slice(&seed);
         to_be_hashed_seed_round[N..].copy_from_slice(&current_round_to_be_hashed);
-        let (_, to_be_hashed, _) = unsafe { to_be_hashed_seed_round.align_to_mut::<u8>() };
+        let to_be_hashed_seed_round_len = to_be_hashed_seed_round.len() * 8;
 
-        let mut sha256_hasher = Sha256::new();
-        sha256_hasher.update(to_be_hashed);
-        let hash = &mut sha256_hasher.finalize();
+        let seed_curr_round_target = make_circuits(&mut builder, to_be_hashed_seed_round_len as u64);
 
-        let hash_to_num = builder.constant(F::from_canonical_u64(u64::from_be_bytes(hash[0..8].try_into().unwrap())));
-        let quotient = builder.div(hash_to_num, index_count);
+        let mut hash_of_seed_curr_round = builder.add_virtual_target();
+        for i in 0..64 {
+            hash_of_seed_curr_round = builder.add(hash_of_seed_curr_round, seed_curr_round_target.digest[i].target);
+        }
+
+        let quotient = builder.div(hash_of_seed_curr_round, index_count);
         let quot_times_index_count = builder.mul(quotient, index_count);
-        let pivot = builder.sub(hash_to_num, quot_times_index_count);
+        let pivot = builder.sub(hash_of_seed_curr_round, quot_times_index_count);
 
         let sum_pivot_index_count = builder.add(pivot, index_count);
         let sum_pivot_icounter_index = builder.sub(sum_pivot_index_count, index);
@@ -115,7 +119,7 @@ fn main() -> Result<(), anyhow::Error> {
         let quotient_times_divisor = builder.mul(index_count, pivot_quotient);
         let flip = builder.sub(sum_pivot_icounter_index, quotient_times_divisor);
 
-        let mut position;
+        let position;
         let index_is_greater: bool = max(index, flip);
         if index_is_greater {
             position = index;
@@ -123,11 +127,13 @@ fn main() -> Result<(), anyhow::Error> {
             position = flip;
         }
 
+        let position_divider_256: Target = builder.constant(F::from_canonical_u16(256));
+
         let position_divided = builder.div(position, position_divider_256);
-        let mut position_to_be_hashed: [plonky2::iop::target::Target; N] = builder.add_virtual_target_arr();
+        let mut position_to_be_hashed: [Target; N] = builder.add_virtual_target_arr();
         position_to_be_hashed[0] = position_divided;
 
-        let mut source_to_be_hashed: [plonky2::iop::target::Target; N*3] = builder.add_virtual_target_arr();
+        let mut source_to_be_hashed: [Target; N*3] = builder.add_virtual_target_arr();
         source_to_be_hashed[..N].copy_from_slice(&seed);
         source_to_be_hashed[N..N*2].copy_from_slice(&current_round_to_be_hashed);
         source_to_be_hashed[N*2..].copy_from_slice(&position_to_be_hashed);
@@ -150,11 +156,11 @@ fn main() -> Result<(), anyhow::Error> {
         let quot_mul_8 = builder.mul(pos_div_8, eight_const);
         let pos_mod_8 = builder.sub(position, quot_mul_8);
 
-        let byte = (source[(position as usize % 256) / 8]) as u8;
-        let bit = (byte >> (position as usize % 8)) % 2;
-        if bit == 1 {
+        // let byte = (source[(position as usize % 256) / 8]) as u8;
+        // let bit = (byte >> (position as usize % 8)) % 2;
+        // if bit == 1 {
             index = flip;
-        }
+        // }
     }
 
     builder.register_public_input(index);
@@ -165,7 +171,7 @@ fn main() -> Result<(), anyhow::Error> {
     let mut pw = PartialWitness::new();
     pw.set_target(index, F::from_canonical_u64(2));
     pw.set_target(index_count, F::from_canonical_u64(888));
-    pw.set_target_arr(&seed, &[F::from_canonical_u64(27), F::from_canonical_u64(26), F::from_canonical_u64(30),
+    pw.set_target_arr(seed, [F::from_canonical_u64(27), F::from_canonical_u64(26), F::from_canonical_u64(30),
     F::from_canonical_u64(6), F::from_canonical_u64(9), F::from_canonical_u64(28), F::from_canonical_u64(13),
     F::from_canonical_u64(0), F::from_canonical_u64(5), F::from_canonical_u64(8), F::from_canonical_u64(14),
     F::from_canonical_u64(12), F::from_canonical_u64(23), F::from_canonical_u64(21), F::from_canonical_u64(16), F::from_canonical_u64(4),
