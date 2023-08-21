@@ -44,7 +44,7 @@ pub fn compute_shuffled_index(index: &mut u64, index_count: u64, seed: [u8; 32])
     *index
 }
 
-fn type_to_bits<T>(val: &T) -> bool {
+fn type_to_bits<T>(val: &T) -> (bool, Vec<u8>) {
     let size = mem::size_of::<T>();
 
     let byte_ptr = val as *const T as *const u8;
@@ -55,10 +55,10 @@ fn type_to_bits<T>(val: &T) -> bool {
         bits.push(byte);
     }
 
-    bits[size] == 1
+    (bits[size - 1] == 1, bits)
 }
 
-pub fn max(index: Target, flip: Target) -> bool {
+pub fn max(index: Target, flip: Target) -> (bool, Vec<u8>) {
     const D: usize = 2;
     type C = PoseidonGoldilocksConfig;
     type F = <C as GenericConfig<D>>::F;
@@ -75,7 +75,15 @@ pub fn max(index: Target, flip: Target) -> bool {
     let index_with_offset = builder.add(index, _offset);
     let diff_with_offset = builder.sub(index_with_offset, flip);
 
-    type_to_bits(&diff_with_offset)
+    let bits_of_position: Vec<u8>;
+    let greater_var: bool;
+
+    (greater_var, bits_of_position) = type_to_bits(&diff_with_offset);
+    (greater_var, bits_of_position)
+}
+
+fn to_u32(slice: &[u8]) -> u32 {
+    slice.iter().fold((0,1),|(acc,mul),&bit|(acc+(mul*(1&bit as u32)),mul.wrapping_add(mul))).0
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -119,16 +127,24 @@ fn main() -> Result<(), anyhow::Error> {
         let quotient_times_divisor = builder.mul(index_count, pivot_quotient);
         let flip = builder.sub(sum_pivot_icounter_index, quotient_times_divisor);
 
-        let position;
-        let index_is_greater: bool = max(index, flip);
+        let position: Target;
+        let position_in_bits;
+        let index_is_greater;
+        (index_is_greater, position_in_bits) = max(index, flip);
         if index_is_greater {
             position = index;
+            println!("position is index");
         } else {
             position = flip;
+            println!("position is flip");
         }
 
-        let position_divider_256: Target = builder.constant(F::from_canonical_u16(256));
+        println!("position in bits is: {:x?}", position_in_bits);
 
+        let position_in_usize = to_u32(&position_in_bits) as usize;
+        println!("position_in_u64 is: {:x?}", position_in_usize);
+
+        let position_divider_256: Target = builder.constant(F::from_canonical_u16(256));
         let position_divided = builder.div(position, position_divider_256);
         let mut position_to_be_hashed: [Target; N] = builder.add_virtual_target_arr();
         position_to_be_hashed[0] = position_divided;
@@ -137,11 +153,14 @@ fn main() -> Result<(), anyhow::Error> {
         source_to_be_hashed[..N].copy_from_slice(&seed);
         source_to_be_hashed[N..N*2].copy_from_slice(&current_round_to_be_hashed);
         source_to_be_hashed[N*2..].copy_from_slice(&position_to_be_hashed);
-        let (_, _source_to_be_hashed, _) = unsafe { source_to_be_hashed.align_to_mut::<u8>() };
+        let source_to_be_hashed_len = source_to_be_hashed.len() * 8;
 
-        let mut source_hasher = Sha256::new();
-        source_hasher.update(_source_to_be_hashed);
-        let source = &mut source_hasher.finalize();
+        let source_to_be_hashed_target = make_circuits(&mut builder, source_to_be_hashed_len as u64);
+
+        let mut hash_of_source: [Target; N*3] = builder.add_virtual_target_arr();
+        for i in 0..64 {
+            hash_of_source[i] = source_to_be_hashed_target.digest[i].target;
+        }
 
         let pos_div_256 = builder.div(position, position_divider_256);
         let quot_mul_256 = builder.mul(position_divider_256, pos_div_256);
@@ -150,13 +169,12 @@ fn main() -> Result<(), anyhow::Error> {
         let eight_const = builder.constant(F::from_canonical_u8(8));
         let source_index = builder.div(pos_mod_256, eight_const);
 
-        // let _byte = source[source_index];
+        let _byte = hash_of_source[source_index];
+        // let byte = (source[(position as usize % 256) / 8]) as u8;
 
         let pos_div_8 = builder.div(position, eight_const);
         let quot_mul_8 = builder.mul(pos_div_8, eight_const);
         let pos_mod_8 = builder.sub(position, quot_mul_8);
-
-        // let byte = (source[(position as usize % 256) / 8]) as u8;
         // let bit = (byte >> (position as usize % 8)) % 2;
         // if bit == 1 {
             index = flip;
