@@ -102,16 +102,8 @@ fn main() -> Result<(), anyhow::Error> {
         let quotient_times_divisor = builder.mul(index_count, pivot_quotient);
         let flip = builder.sub(sum_pivot_icounter_index, quotient_times_divisor);
 
-        let mut position = builder.add_virtual_target();
-        let mut less_than: BoolTarget = max(index, flip);
-
-        // builder.assert_one(less_than.target);
-
-        // if less_than {
-        //     position = flip;
-        // } else {
-        //     position = index;
-        // }
+        let is_less_than = max(index, flip);
+        let position = builder.select(is_less_than, flip, index);
 
         let position_divider_256: Target = builder.constant(F::from_canonical_u16(256));
         let position_divided = builder.div(position, position_divider_256);
