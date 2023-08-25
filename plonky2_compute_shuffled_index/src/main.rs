@@ -1,13 +1,14 @@
 extern crate sha2;
 use plonky2::field::types::Field;
-use plonky2::iop::target::Target;
+use plonky2::iop::target::{Target, BoolTarget};
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::CircuitConfig;
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
+use plonky2_u32::gadgets::multiple_comparison::list_le_circuit;
 use sha2::{Digest, Sha256};
 use plonky2_sha256::circuit::make_circuits;
-use std::{cmp, mem};
+use std::cmp;
 
 const SHUFFLE_ROUND_COUNT: usize = 90;
 
@@ -44,21 +45,7 @@ pub fn compute_shuffled_index(index: &mut u64, index_count: u64, seed: [u8; 32])
     *index
 }
 
-fn type_to_bits<T>(val: &T) -> (bool, Vec<u8>) {
-    let size = mem::size_of::<T>();
-
-    let byte_ptr = val as *const T as *const u8;
-
-    let mut bits = Vec::new();
-    for i in 0..size {
-        let byte = unsafe { *byte_ptr.add(i) };
-        bits.push(byte);
-    }
-
-    (bits[size - 1] == 1, bits)
-}
-
-pub fn max(index: Target, flip: Target) -> (bool, Vec<u8>) {
+pub fn max(index: Target, flip: Target) -> BoolTarget {
     const D: usize = 2;
     type C = PoseidonGoldilocksConfig;
     type F = <C as GenericConfig<D>>::F;
@@ -71,19 +58,7 @@ pub fn max(index: Target, flip: Target) -> (bool, Vec<u8>) {
     index_vector.push(index);
     flip_vector.push(flip);
 
-    let _offset = builder.constant(F::from_canonical_u64(1 << 63));
-    let index_with_offset = builder.add(index, _offset);
-    let diff_with_offset = builder.sub(index_with_offset, flip);
-
-    let bits_of_position: Vec<u8>;
-    let greater_var: bool;
-
-    (greater_var, bits_of_position) = type_to_bits(&diff_with_offset);
-    (greater_var, bits_of_position)
-}
-
-fn to_u32(slice: &[u8]) -> u32 {
-    slice.iter().fold((0,1),|(acc,mul),&bit|(acc+(mul*(1&bit as u32)),mul.wrapping_add(mul))).0
+    list_le_circuit(&mut builder, index_vector, flip_vector, 32)
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -99,7 +74,7 @@ fn main() -> Result<(), anyhow::Error> {
     let mut index = builder.add_virtual_target();
     let index_count = builder.add_virtual_target();
     let seed: [Target; N] = builder.add_virtual_target_arr();
-    
+
     for current_round in 0..SHUFFLE_ROUND_COUNT {
         let current_round_target = builder.constant(F::from_canonical_u8(current_round as u8));
         let mut current_round_to_be_hashed: [Target; N] = builder.add_virtual_target_arr();
@@ -127,22 +102,16 @@ fn main() -> Result<(), anyhow::Error> {
         let quotient_times_divisor = builder.mul(index_count, pivot_quotient);
         let flip = builder.sub(sum_pivot_icounter_index, quotient_times_divisor);
 
-        let position: Target;
-        let position_in_bits;
-        let index_is_greater;
-        (index_is_greater, position_in_bits) = max(index, flip);
-        if index_is_greater {
-            position = index;
-            println!("position is index");
-        } else {
-            position = flip;
-            println!("position is flip");
-        }
+        let mut position = builder.add_virtual_target();
+        let mut less_than: BoolTarget = max(index, flip);
 
-        println!("position in bits is: {:x?}", position_in_bits);
+        // builder.assert_one(less_than.target);
 
-        let position_in_usize = to_u32(&position_in_bits) as usize;
-        println!("position_in_u64 is: {:x?}", position_in_usize);
+        // if less_than {
+        //     position = flip;
+        // } else {
+        //     position = index;
+        // }
 
         let position_divider_256: Target = builder.constant(F::from_canonical_u16(256));
         let position_divided = builder.div(position, position_divider_256);
@@ -169,12 +138,17 @@ fn main() -> Result<(), anyhow::Error> {
         let eight_const = builder.constant(F::from_canonical_u8(8));
         let source_index = builder.div(pos_mod_256, eight_const);
 
-        let _byte = hash_of_source[source_index];
-        // let byte = (source[(position as usize % 256) / 8]) as u8;
+        let mut byte = builder.add_virtual_target();
+        for i in 0..hash_of_source.len() {
+            if hash_of_source[i] == source_index {
+                byte = source_index;
+            }
+        }
 
         let pos_div_8 = builder.div(position, eight_const);
         let quot_mul_8 = builder.mul(pos_div_8, eight_const);
         let pos_mod_8 = builder.sub(position, quot_mul_8);
+
         // let bit = (byte >> (position as usize % 8)) % 2;
         // if bit == 1 {
             index = flip;

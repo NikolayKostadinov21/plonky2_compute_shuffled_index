@@ -9,5 +9,5 @@ edition = "2021"
 sha2 = "*"
 plonky2 = { git = "https://github.com/polymerdao/plonky2", rev = "4cb0b48df1d227d5461a4c28ed025aaea64e2e62" }
 plonky2_u32 = { git = "https://github.com/polymerdao/plonky2", rev = "4cb0b48df1d227d5461a4c28ed025aaea64e2e62" }
-anyhow = "1.0.74"
 plonky2_sha256 = { git = "https://github.com/polymerdao/plonky2-sha256.git", version = "0.1.0" }
+anyhow = "1.0.74"
