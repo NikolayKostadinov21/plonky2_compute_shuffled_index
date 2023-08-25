@@ -141,10 +141,16 @@ fn main() -> Result<(), anyhow::Error> {
         let quot_mul_8 = builder.mul(pos_div_8, eight_const);
         let pos_mod_8 = builder.sub(position, quot_mul_8);
 
-        // let bit = (byte >> (position as usize % 8)) % 2;
-        // if bit == 1 {
-            index = flip;
-        // }
+        let two_const = builder.constant(F::from_canonical_u8(2));
+        // pos_mod_8 ---> to bits
+        let _2_exp_y = builder.exp_from_bits(two_const, pos_mod_8);
+        let byte_shift_y = builder.div(byte, _2_exp_y);
+
+        let shift_div_2 = builder.div(position, two_const);
+        let quot_mul_2 = builder.mul(shift_div_2, two_const);
+        let bit = builder.sub(byte_shift_y, quot_mul_2);
+
+        index = builder.select(BoolTarget, index, flip);
     }
 
     builder.register_public_input(index);
